@@ -112,6 +112,7 @@ if uploaded_file and st.button("🚀 Run Report"):
             file_name=f"data_process_{timestamp}.log"
         )
 
-    except Exception as e:
-        logging.error("Process failed", exc_info=True)
-        st.error("❌ Processing failed. Please download and check the process log.")
+  except Exception as e:
+    logging.error("Process failed", exc_info=True)
+    st.error("❌ Processing failed. Error details below:")
+    st.exception(e)
