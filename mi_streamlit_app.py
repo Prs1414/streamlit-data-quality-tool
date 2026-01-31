@@ -1,131 +1,111 @@
 import streamlit as st
 import pandas as pd
 import logging
-import io
-from datetime import datetime
+from io import BytesIO
 
-# -------------------------------
-# Streamlit Page Config
-# -------------------------------
+# ---------------------------------
+# Page config
+# ---------------------------------
 st.set_page_config(
-    page_title="MI Data Quality Tool",
-    layout="centered"
+    page_title="Data Quality Tool",
+    layout="wide"
 )
 
-st.title("📊 MI Data Quality & Reporting Tool")
-st.write("Upload stock data Excel file and generate MI report with process log.")
+st.title("📊 Data Quality Automation Tool")
+st.write("Upload Excel file to process data quality checks and generate output.")
 
-# -------------------------------
-# In-memory Log Buffer (Cloud-safe)
-# -------------------------------
-# We create this outside the button logic so it's ready to catch logs
-log_buffer = io.StringIO()
+# ---------------------------------
+# Logger configuration
+# ---------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[logging.StreamHandler(log_buffer)],
-    force=True # Ensures logs reset correctly on rerun
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-# -------------------------------
+# ---------------------------------
 # File uploader
-# -------------------------------
-uploaded_file = st.file_uploader("📂 Upload Excel File", type=["xlsx"])
+# ---------------------------------
+uploaded_file = st.file_uploader(
+    "📤 Upload Excel file (.xlsx only)",
+    type=["xlsx"]
+)
 
-# -------------------------------
-# Run Button
-# -------------------------------
-if uploaded_file and st.button("🚀 Run Report"):
-
-    logging.info("===== PROCESS STARTED =====")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
+# ---------------------------------
+# Main processing
+# ---------------------------------
+if uploaded_file is not None:
     try:
-        # -------------------------------
-        # Read Excel
-        # -------------------------------
-        # Note: requires 'openpyxl' in requirements.txt
-        df = pd.read_excel(uploaded_file)
-        logging.info(f"Rows read: {len(df)}")
+        # ✅ Explicit engine to avoid cloud errors
+        df = pd.read_excel(uploaded_file, engine="openpyxl")
 
-        # -------------------------------
-        # Data Quality Checks
-        # -------------------------------
-        logging.info("Running data quality checks")
-        null_info = df.isnull().sum().to_string()
-        logging.info(f"Null counts:\n{null_info}")
+        st.subheader("📄 Uploaded Data Preview")
+        st.dataframe(df.head())
 
-        # -------------------------------
-        # Business Calculations
-        # -------------------------------
-        # Ensure columns exist before calculating to avoid KeyErrors
-        required_cols = ["Buy_Price", "Quantity", "Current_Price", "Risk_Level", "Sector"]
-        if all(col in df.columns for col in required_cols):
-            
-            df["Investment_Value"] = df["Buy_Price"] * df["Quantity"]
-            df["Current_Value"] = df["Current_Price"] * df["Quantity"]
-            df["Profit_Loss"] = df["Current_Value"] - df["Investment_Value"]
+        # ---------------------------------
+        # Required columns check
+        # ---------------------------------
+        required_columns = [
+            "Buy_Price",
+            "Current_Price",
+            "Quantity",
+            "Risk_Level",
+            "Sector"
+        ]
 
-            df["Status"] = df["Profit_Loss"].apply(
-                lambda x: "Profit" if x > 0 else "Loss"
-            )
+        missing_columns = [c for c in required_columns if c not in df.columns]
 
-            df["High_Risk_Flag"] = df["Risk_Level"].apply(
-                lambda x: "Yes" if str(x).lower() == "high" else "No"
-            )
+        if missing_columns:
+            st.error(f"❌ Missing required columns: {missing_columns}")
+            st.stop()
 
-            # -------------------------------
-            # Summary Tables
-            # -------------------------------
-            portfolio_summary = pd.DataFrame({
-                "Total_Investment": [df["Investment_Value"].sum()],
-                "Total_Current_Value": [df["Current_Value"].sum()],
-                "Net_Profit_Loss": [df["Profit_Loss"].sum()]
-            })
+        # ---------------------------------
+        # Data type handling
+        # ---------------------------------
+        numeric_columns = ["Buy_Price", "Current_Price", "Quantity"]
 
-            sector_summary = df.groupby("Sector", as_index=False)["Profit_Loss"].sum()
+        for col in numeric_columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            # -------------------------------
-            # Write Output Excel (in-memory)
-            # -------------------------------
-            output_buffer = io.BytesIO()
-            with pd.ExcelWriter(output_buffer, engine="xlsxwriter") as writer:
-                df.to_excel(writer, sheet_name="Detailed_Stock_Data", index=False)
-                portfolio_summary.to_excel(writer, sheet_name="Portfolio_Summary", index=False)
-                sector_summary.to_excel(writer, sheet_name="Sector_Summary", index=False)
+        # ---------------------------------
+        # Business calculations
+        # ---------------------------------
+        df["Investment_Value"] = df["Buy_Price"].fillna(0) * df["Quantity"].fillna(0)
+        df["Current_Value"] = df["Current_Price"].fillna(0) * df["Quantity"].fillna(0)
+        df["Profit_Loss"] = df["Current_Value"] - df["Investment_Value"]
 
-            output_buffer.seek(0)
-            logging.info("Output Excel generated successfully")
-            logging.info("===== PROCESS COMPLETED =====")
+        df["Status"] = df["Profit_Loss"].apply(
+            lambda x: "Profit" if x > 0 else "Loss"
+        )
 
-            # -------------------------------
-            # Success Message & Downloads
-            # -------------------------------
-            st.success("✅ Report generated successfully!")
+        df["High_Risk_Flag"] = df["Risk_Level"].astype(str).str.lower().apply(
+            lambda x: "Yes" if x == "high" else "No"
+        )
 
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.download_button(
-                    label="⬇️ Download MI Excel",
-                    data=output_buffer,
-                    file_name=f"stocks_mi_output_{timestamp}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+        st.success("✅ File processed successfully")
 
-            with col2:
-                st.download_button(
-                    label="⬇️ Download Process Log",
-                    data=log_buffer.getvalue(),
-                    file_name=f"data_process_{timestamp}.log",
-                    mime="text/plain"
-                )
-        else:
-            missing = [c for c in required_cols if c not in df.columns]
-            st.error(f"Missing columns in Excel: {', '.join(missing)}")
-            logging.error(f"Missing columns: {missing}")
+        # ---------------------------------
+        # Display processed data
+        # ---------------------------------
+        st.subheader("📈 Processed Data")
+        st.dataframe(df)
+
+        # ---------------------------------
+        # Download output
+        # ---------------------------------
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            df.to_excel(writer, index=False, sheet_name="Processed_Data")
+
+        output.seek(0)
+
+        st.download_button(
+            label="⬇️ Download Processed Excel",
+            data=output,
+            file_name="processed_output.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
     except Exception as e:
-        logging.error("Process failed", exc_info=True)
+        logging.error("Processing failed", exc_info=True)
         st.error("❌ Processing failed. Error details below:")
         st.exception(e)
